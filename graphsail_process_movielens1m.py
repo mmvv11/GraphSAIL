@@ -2,11 +2,10 @@ import argparse
 import os
 import pickle
 import re
-import numpy as np
 import pandas as pd
 import torch
 from builder import PandasGraphBuilder
-# from data_utils import *
+from sklearn.model_selection import train_test_split
 import dgl
 
 pd.set_option('mode.chained_assignment',  None)
@@ -98,34 +97,6 @@ def df2graph(users, movies, ratings):
     return g
 
 
-def get_IncIndices(df):
-    """
-    각 inc block에 들어가야할 interaction row에 mask를 생성한다.
-    """
-    BASE_DATA_RATIO = 6
-    INC_STEP = 5
-
-    # base block 설정
-    pivot = len(df) * BASE_DATA_RATIO // 10
-    df['mask_0'] = False
-    df.iloc[:pivot, df.columns.get_loc("mask_0")] = True
-
-    # inc block 설정
-    len_per_block = df[pivot:].shape[0] // INC_STEP
-    start = pivot
-    for i in range(INC_STEP):
-        df[f"mask_{i + 1}"] = False
-        if i != INC_STEP - 1:  # 1, 2, 3, 4 block이라면
-            df.iloc[start:start + len_per_block, df.columns.get_loc(f"mask_{i + 1}")] = True
-        else:  # 마지막 block이라면
-            df.iloc[start:, df.columns.get_loc(f"mask_{i + 1}")] = True
-        start += len_per_block
-
-    return [
-        df[f"mask_{i}"].to_numpy().nonzero()[0] for i in range(INC_STEP + 1)
-    ]
-
-
 def build_subgraph(g, indices, utype, itype, etype, etype_rev):
     """
         # Build the graph with training interactions only.
@@ -144,28 +115,13 @@ def build_subgraph(g, indices, utype, itype, etype, etype_rev):
 
     return subgraph
 
-def split_trainvaltest(df):
-    """
-    df의 80%는 train,
-    10% val
-    10% test
-    """
-    train_pivot = df.shape[0] * 8 // 10
-    train_df = df[:train_pivot]
-    labels = df[train_pivot:]
-    labels_series = labels.groupby("user_id")['movie_id'].agg(list)
-    labels_series = labels_series.sample(frac=1, random_state=30)
-    pivot = labels_series.shape[0] // 2
-    val_data = labels_series[:pivot]
-    test_data = labels_series[pivot:]
-    return train_df, val_data, test_data
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=str, default="./dataset/ml-1m")
     args = parser.parse_args()
     directory = args.directory
-    out_directory = "/dataset"
+    out_directory = "./dataset"
 
     # Load data
     users = []
@@ -239,35 +195,45 @@ if __name__ == "__main__":
     ratings = sort_by_time(ratings)
     ratings['timestamp'] = ratings['timestamp'].dt.year
 
+    # split data
+    train_dfs = []
+    base_pivot = ratings.shape[0] * 6 // 10
+    train_dfs.append(ratings[:base_pivot])
+    inc_ratings = ratings[base_pivot:]
+    n = inc_ratings.shape[0]
+    chunk_size = n // 5
+    chunks = [inc_ratings.iloc[i:i+chunk_size] for i in range(0, n, chunk_size)]
+    train_dfs += chunks
+    train_dfs = train_dfs[:-1]
 
+    for i in range(len(train_dfs)-1):
+        if i == 0:
+            # base block, randomly split 80% for train, 10% for val, 10% for test
+            train_df, remain_df = train_test_split(train_dfs[0], train_size=0.8, random_state=42)
+            val_data, test_data = train_test_split(remain_df, train_size=0.5, random_state=42)
+            train_g = df2graph(users, movies, train_df)
+            prev_g = train_g
+            total_g = train_g
+        else:
+            train_g = df2graph(users, movies, train_dfs[i])
+            prev_g = df2graph(users, movies, pd.concat(train_dfs[:i], axis=0))
+            total_g = df2graph(users, movies,pd.concat(train_dfs[:i+1], axis=0))
+            val_data, test_data = train_test_split(train_dfs[i+1], train_size=0.5, random_state=42)
 
+        # set dataset
+        dataset = {
+            "train_g" : train_g,
+            "prev_g" : prev_g,
+            "total_g" : total_g,
+            "val_data" : val_data,
+            "test_data" : test_data,
+            "user-type": "user",
+            "item-type": "movie",
+            "user-to-item-type": "watched",
+            "item-to-user-type": "watched-by",
+            "timestamp-edge-column": "timestamp",
+        }
 
-
-    # for i in range(6):
-    #     # 단계별로 그래프 설정해주고..
-    #     if i == 0:
-    #         train_g = df2graph(users, movies, train_dfs[i])
-    #         prev_g = train_g
-    #         total_g = train_g
-    #     else:
-    #         train_g = df2graph(users, movies, train_dfs[i])
-    #         prev_g = df2graph(users, movies, pd.concat(train_dfs[:i], axis=0))
-    #         total_g = df2graph(users, movies,pd.concat(train_dfs[:i+1], axis=0))
-    #
-    #     # set dataset
-    #     dataset = {
-    #         "train_g" : train_g,
-    #         "prev_g" : prev_g,
-    #         "total_g" : total_g,
-    #         "val_data" : val_dataset[i],
-    #         "test_data" : test_dataset[i],
-    #         "user-type": "user",
-    #         "item-type": "movie",
-    #         "user-to-item-type": "watched",
-    #         "item-to-user-type": "watched-by",
-    #         "timestamp-edge-column": "timestamp",
-    #     }
-    #
-    #     # save data
-    #     with open(os.path.join(out_directory, f"dataset{i}.pkl"), "wb") as f:
-    #         pickle.dump(dataset, f)
+        # save data
+        with open(os.path.join(out_directory, f"dataset{i}.pkl"), "wb") as f:
+            pickle.dump(dataset, f)

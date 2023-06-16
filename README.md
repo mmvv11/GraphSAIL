@@ -26,3 +26,6 @@ item embeddings, which are learned as outputs of PinSAGE.
 ```
 python model.py
 ```
+
+## limit
+* Only implemented Local Structure Preserving and Global Structure Preserving moduls
