@@ -24,14 +24,5 @@ interacted.  The distance between two items are measured by Euclidean distance o
 item embeddings, which are learned as outputs of PinSAGE.
 
 ```
-python model.py data_processed --num-epochs 300 --num-workers 2 --device cuda:0 --hidden-dims 64
-```
-
-The implementation here also assigns a learnable vector to each item.  If your hidden
-state size is so large that the learnable vectors cannot fit into GPU, use this script
-for sparse embedding update (written with `torch.optim.SparseAdam`) instead:
-
-
-```
-python model_sparse.py data_processed --num-epochs 300 --num-workers 2 --device cuda:0 --hidden-dims 1024
+python model.py
 ```
